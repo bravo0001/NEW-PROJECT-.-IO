@@ -2,10 +2,10 @@ import { Chart, registerables } from 'chart.js';
 Chart.register(...registerables);
 
 import { store } from './store.js';
-import { renderDashboard, renderAPLsList, renderCreateForm, renderAnalytics, renderTimeline, renderLearnings, renderAPLDetail } from './pages.js';
+import { renderDashboard, renderAPLsList, renderCreateForm, renderAnalytics, renderTimeline, renderLearnings, renderAPLDetail, renderGenerateReport } from './pages.js';
 import { renderChatWidget, initChatEvents } from './chatbot.js';
 import { generateAPLReport, generateSummaryReport } from './pdf-generator.js';
-import { compressImage, resolveImageUrl, scrapeUrl, isGoogleDriveUrl, parseGoogleDriveUrl } from './media-manager.js';
+import { compressImage, resolveImageUrl, scrapeUrl, isGoogleDriveUrl, parseGoogleDriveUrl, fetchDriveFolderPhotos } from './media-manager.js';
 
 // Temporary photos array for the current form
 let formPhotos = [];
@@ -27,6 +27,7 @@ function navigate(page, params) {
     case 'dashboard': container.innerHTML = renderDashboard(); initDashboardCharts(); break;
     case 'apls': container.innerHTML = renderAPLsList(params?.search); break;
     case 'create': container.innerHTML = renderCreateForm(params?.editId); initFormEvents(); break;
+    case 'generate': container.innerHTML = renderGenerateReport(); initGenerateEvents(); break;
     case 'analytics': container.innerHTML = renderAnalytics(); initAnalyticsCharts(); break;
     case 'timeline': container.innerHTML = renderTimeline(); break;
     case 'learnings': container.innerHTML = renderLearnings(); break;
@@ -86,6 +87,175 @@ function initAnalyticsCharts() {
       datasets:[{ label:'Frequency', data:tagEntries.map(e=>e[1]), backgroundColor:C.purple, borderRadius:6, barPercentage:0.5 }] },
       options:{...chartDefaults, indexAxis:'y', plugins:{legend:{display:false}}} });
   }
+}
+
+// ═══ GDGC Report Generator Events ═══
+function initGenerateEvents() {
+  const progressDiv = document.getElementById('gen-progress');
+  const previewDiv = document.getElementById('gen-preview');
+  let scrapedData = null;
+  let drivePhotos = [];
+
+  function addProgress(icon, text, status = 'info') {
+    const colors = { info: 'var(--text-muted)', success: 'var(--success)', error: 'var(--danger)', loading: 'var(--accent-primary)' };
+    progressDiv.innerHTML += `<div class="gen-step" style="color:${colors[status]}">${icon} ${text}</div>`;
+    progressDiv.scrollTop = progressDiv.scrollHeight;
+  }
+
+  function clearProgress() { progressDiv.innerHTML = ''; previewDiv.innerHTML = ''; }
+
+  async function scrapeEvent() {
+    const url = document.getElementById('gen-event-url').value.trim();
+    if (!url) { showToast('Please enter an event URL.', 'error'); return null; }
+    addProgress('🔍', 'Scraping event page...', 'loading');
+    const result = await scrapeUrl(url);
+    if (!result.success) {
+      addProgress('❌', `Scrape failed: ${result.error}`, 'error');
+      return null;
+    }
+    addProgress('✅', `Event scraped: <strong>${result.title || 'Untitled'}</strong>`, 'success');
+    if (result.description) addProgress('📝', `Description: ${result.description.substring(0, 150)}...`, 'info');
+    if (result.images.length) addProgress('🖼️', `Found ${result.images.length} images on event page`, 'info');
+    if (result.eventData?.startDate) addProgress('📅', `Date: ${result.eventData.startDate}`, 'info');
+    return result;
+  }
+
+  async function fetchPhotos() {
+    const url = document.getElementById('gen-drive-url').value.trim();
+    if (!url) { showToast('Please enter a Google Drive folder URL.', 'error'); return []; }
+    addProgress('📁', 'Fetching photos from Google Drive folder...', 'loading');
+    const result = await fetchDriveFolderPhotos(url);
+    if (!result.success) {
+      addProgress('⚠️', result.error, 'error');
+      if (result.manualHint) {
+        addProgress('💡', 'Tip: Open the folder, right-click photos → "Get link" → paste individual links in the form.', 'info');
+      }
+      return [];
+    }
+    addProgress('✅', `Found ${result.count} photos in Drive folder!`, 'success');
+    return result.photos;
+  }
+
+  function showPreview(eventInfo, photos) {
+    const title = eventInfo?.title || 'Untitled Event';
+    const desc = eventInfo?.description || eventInfo?.textContent?.substring(0, 300) || '';
+    const date = eventInfo?.eventData?.startDate || new Date().toISOString().split('T')[0];
+
+    previewDiv.innerHTML = `
+      <div class="card" style="border:1px solid var(--accent-primary);margin-top:20px">
+        <h3 style="margin-bottom:16px">📋 Report Preview</h3>
+        <div class="detail-grid" style="margin-bottom:16px">
+          <div><div class="detail-item-label">Event Name</div><div class="detail-item-value">${title}</div></div>
+          <div><div class="detail-item-label">Source</div><div class="detail-item-value">${eventInfo?.siteName || eventInfo?.url || '—'}</div></div>
+          <div><div class="detail-item-label">Date</div><div class="detail-item-value">${date}</div></div>
+          <div><div class="detail-item-label">Photos</div><div class="detail-item-value">${photos.length} photos</div></div>
+        </div>
+        ${desc ? `<div style="font-size:0.85rem;color:var(--text-secondary);line-height:1.6;margin-bottom:16px;max-height:100px;overflow:auto">${desc}</div>` : ''}
+        ${photos.length > 0 ? `
+          <div style="margin-bottom:16px">
+            <strong style="font-size:0.8rem;color:var(--text-muted)">PHOTOS PREVIEW</strong>
+            <div class="photo-grid" style="margin-top:8px">
+              ${photos.slice(0, 12).map((p, i) => `
+                <div class="photo-thumb">
+                  <img src="${p.thumbnailUrl || p.url}" alt="Photo ${i+1}" loading="lazy" onerror="this.parentElement.style.display='none'">
+                </div>`).join('')}
+              ${photos.length > 12 ? `<div class="photo-thumb" style="display:flex;align-items:center;justify-content:center;background:var(--bg-secondary);font-size:0.85rem;color:var(--text-muted)">+${photos.length - 12} more</div>` : ''}
+            </div>
+          </div>` : ''}
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <button class="btn btn-primary btn-lg" id="btn-save-generated">✅ Save as APL & Open</button>
+          <button class="btn btn-secondary" id="btn-pdf-generated">📄 Download PDF Directly</button>
+        </div>
+      </div>`;
+
+    // Save as APL
+    document.getElementById('btn-save-generated')?.addEventListener('click', () => {
+      const aplData = {
+        name: title,
+        date: date,
+        endDate: eventInfo?.eventData?.endDate || '',
+        type: 'Conference',
+        location: eventInfo?.eventData?.location || '',
+        objectives: desc,
+        targetAudience: 'Developers, Students, Cloud Enthusiasts',
+        tags: ['gdgc', 'google-cloud', 'event'],
+        status: 'completed',
+        photos: photos.map(p => ({ url: p.url, caption: p.caption || '', type: p.type })),
+        sourceUrl: eventInfo?.url || '',
+      };
+      const created = store.createAPL(aplData);
+      showToast('APL created from event data!', 'success');
+      navigate('detail', { id: created.id });
+    });
+
+    // Direct PDF
+    document.getElementById('btn-pdf-generated')?.addEventListener('click', () => {
+      const tempData = {
+        id: 'temp',
+        name: title,
+        date: date,
+        type: 'Conference',
+        location: eventInfo?.eventData?.location || '',
+        objectives: desc,
+        targetAudience: 'Developers, Students, Cloud Enthusiasts',
+        tags: ['gdgc', 'google-cloud', 'event'],
+        status: 'completed',
+        photos: photos,
+        successRating: 0,
+        feedbackScore: 0,
+        actualParticipants: 0,
+        expectedParticipants: 0,
+        budgetPlanned: 0,
+        budgetActual: 0,
+      };
+      // Temporarily save, generate PDF, then offer to keep
+      const created = store.createAPL(tempData);
+      generateAPLReport(created.id);
+      showToast('PDF generated! APL saved.', 'success');
+      navigate('detail', { id: created.id });
+    });
+  }
+
+  // Full generate
+  document.getElementById('btn-generate-report')?.addEventListener('click', async () => {
+    clearProgress();
+    addProgress('🚀', 'Starting GDGC Report Generation...', 'loading');
+    scrapedData = await scrapeEvent();
+    drivePhotos = await fetchPhotos();
+
+    if (!scrapedData && drivePhotos.length === 0) {
+      addProgress('❌', 'No data to generate report. Check your URLs.', 'error');
+      return;
+    }
+    // Merge event page images with drive photos
+    const allPhotos = [...drivePhotos];
+    if (scrapedData?.images?.length) {
+      scrapedData.images.slice(0, 3).forEach(img => {
+        allPhotos.push({ url: img.src, thumbnailUrl: img.src, caption: img.alt || 'Event page image', type: 'scraped' });
+      });
+    }
+    addProgress('🎉', `Report ready! ${allPhotos.length} photos total.`, 'success');
+    showPreview(scrapedData, allPhotos);
+  });
+
+  // Scrape only
+  document.getElementById('btn-gen-scrape-only')?.addEventListener('click', async () => {
+    clearProgress();
+    scrapedData = await scrapeEvent();
+    if (scrapedData) {
+      const eventPhotos = (scrapedData.images || []).map(img => ({ url: img.src, thumbnailUrl: img.src, caption: img.alt, type: 'scraped' }));
+      showPreview(scrapedData, eventPhotos);
+    }
+  });
+
+  // Photos only
+  document.getElementById('btn-gen-photos-only')?.addEventListener('click', async () => {
+    clearProgress();
+    drivePhotos = await fetchPhotos();
+    if (drivePhotos.length > 0) {
+      showPreview(null, drivePhotos);
+    }
+  });
 }
 
 function initFormEvents() {

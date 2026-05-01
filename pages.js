@@ -58,6 +58,41 @@ export function renderAPLsList(searchQuery) {
     </tbody></table></div>`;
 }
 
+export function renderGenerateReport() {
+  return `
+    <div class="page-header"><h1>🚀 <span>GDGC Event Report Generator</span></h1></div>
+    <div class="gen-report-intro card" style="border-left:3px solid var(--accent-primary);margin-bottom:24px">
+      <p style="color:var(--text-secondary);line-height:1.7;margin:0">
+        <strong style="color:var(--text-primary)">Paste your event link + Google Drive photos folder</strong> — the system will automatically scrape the event details, fetch your photos, and generate a complete APL report with embedded images.
+      </p>
+    </div>
+    <div class="grid-2" style="gap:20px;margin-bottom:24px">
+      <div class="card">
+        <h3 style="margin-bottom:16px">🌐 Step 1: Event URL</h3>
+        <div class="form-group">
+          <label class="form-label">Paste the event page link</label>
+          <input class="form-input" id="gen-event-url" placeholder="https://cloudonair.withgoogle.com/events/..." style="font-size:0.85rem">
+          <small style="color:var(--text-muted)">Supports Google CloudOnAir, GDG events, or any public event page.</small>
+        </div>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:16px">📁 Step 2: Drive Photos Folder</h3>
+        <div class="form-group">
+          <label class="form-label">Paste the Google Drive folder link</label>
+          <input class="form-input" id="gen-drive-url" placeholder="https://drive.google.com/drive/folders/..." style="font-size:0.85rem">
+          <small style="color:var(--text-muted)">The folder should be publicly shared (Anyone with the link).</small>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap">
+      <button class="btn btn-primary btn-lg" id="btn-generate-report" style="min-width:220px">🚀 Generate Report</button>
+      <button class="btn btn-secondary" id="btn-gen-scrape-only">🔍 Scrape Event Only</button>
+      <button class="btn btn-secondary" id="btn-gen-photos-only">📷 Fetch Photos Only</button>
+    </div>
+    <div id="gen-progress" class="gen-progress"></div>
+    <div id="gen-preview" class="gen-preview"></div>`;
+}
+
 export function renderCreateForm(editId) {
   const apl = editId ? store.getAPL(editId) : null;
   const v = (f) => apl ? (apl[f]||'') : '';
