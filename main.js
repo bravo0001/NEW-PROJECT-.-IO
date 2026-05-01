@@ -5,6 +5,10 @@ import { store } from './store.js';
 import { renderDashboard, renderAPLsList, renderCreateForm, renderAnalytics, renderTimeline, renderLearnings, renderAPLDetail } from './pages.js';
 import { renderChatWidget, initChatEvents } from './chatbot.js';
 import { generateAPLReport, generateSummaryReport } from './pdf-generator.js';
+import { compressImage, resolveImageUrl, scrapeUrl, isGoogleDriveUrl, parseGoogleDriveUrl } from './media-manager.js';
+
+// Temporary photos array for the current form
+let formPhotos = [];
 
 const container = document.getElementById('page-container');
 const mainContent = document.getElementById('main-content');
@@ -86,6 +90,15 @@ function initAnalyticsCharts() {
 
 function initFormEvents() {
   const form = document.getElementById('apl-form');
+  // Load existing photos if editing
+  const editId = form.dataset.editId;
+  if (editId) {
+    const existing = store.getAPL(editId);
+    formPhotos = existing?.photos ? [...existing.photos] : [];
+  } else {
+    formPhotos = [];
+  }
+
   // Section tabs
   document.querySelectorAll('.section-tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -95,7 +108,91 @@ function initFormEvents() {
       document.querySelector(`[data-section-panel="${tab.dataset.section}"]`).classList.add('active');
     });
   });
-  // Submit
+
+  // Photo upload from file
+  document.getElementById('photo-upload')?.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    if (formPhotos.length + files.length > 10) {
+      showToast('Maximum 10 photos allowed.', 'error');
+      return;
+    }
+    for (const file of files) {
+      try {
+        const dataUrl = await compressImage(file);
+        formPhotos.push({ url: dataUrl, caption: file.name.replace(/\.[^.]+$/, ''), type: 'upload' });
+      } catch { showToast('Failed to process: ' + file.name, 'error'); }
+    }
+    refreshPhotoGrid();
+    showToast(`${files.length} photo(s) added!`, 'success');
+  });
+
+  // Photo from URL / Google Drive
+  document.getElementById('btn-add-photo-url')?.addEventListener('click', () => {
+    const input = document.getElementById('photo-url-input');
+    const url = input.value.trim();
+    if (!url) return;
+    if (formPhotos.length >= 10) { showToast('Maximum 10 photos.', 'error'); return; }
+    const resolved = resolveImageUrl(url);
+    const type = isGoogleDriveUrl(url) ? 'gdrive' : 'url';
+    formPhotos.push({ url: resolved, originalUrl: url, caption: '', type });
+    refreshPhotoGrid();
+    input.value = '';
+    showToast(`Photo added from ${type === 'gdrive' ? 'Google Drive' : 'URL'}!`, 'success');
+  });
+
+  // Web scraper
+  document.getElementById('btn-scrape')?.addEventListener('click', async () => {
+    const url = document.getElementById('scraper-url-input').value.trim();
+    if (!url) return;
+    const resultsDiv = document.getElementById('scraper-results');
+    resultsDiv.innerHTML = '<div class="scraper-loading">🔍 Scraping page...</div>';
+    const result = await scrapeUrl(url);
+    if (!result.success) {
+      resultsDiv.innerHTML = `<div class="scraper-card"><p style="color:var(--danger)">❌ Failed: ${result.error}</p></div>`;
+      return;
+    }
+    resultsDiv.innerHTML = `
+      <div class="scraper-card">
+        <h4>${result.title || 'No title'}</h4>
+        <p>${result.description || result.textContent?.substring(0, 200) || 'No description found.'}</p>
+        ${result.headings.length ? `<div style="margin-bottom:8px"><strong style="font-size:0.8rem;color:var(--text-muted)">HEADINGS:</strong> ${result.headings.slice(0,5).map(h=>`<span class="tag">${h}</span>`).join(' ')}</div>` : ''}
+        <button type="button" class="btn btn-sm btn-secondary" id="btn-scrape-fill">📝 Auto-fill name & description</button>
+        ${result.images.length ? `
+          <div style="margin-top:12px"><strong style="font-size:0.8rem;color:var(--text-muted)">IMAGES FOUND (${result.images.length}) — click to add:</strong></div>
+          <div class="scraper-images">
+            ${result.images.slice(0,12).map((img,i) => `
+              <div class="scraper-img-item" data-scraper-img="${i}">
+                <img src="${img.src}" alt="${img.alt}" loading="lazy" onerror="this.parentElement.style.display='none'">
+              </div>`).join('')}
+          </div>` : ''}
+      </div>`;
+
+    // Auto-fill button
+    document.getElementById('btn-scrape-fill')?.addEventListener('click', () => {
+      const nameInput = form.querySelector('[name="name"]');
+      const objInput = form.querySelector('[name="objectives"]');
+      if (nameInput && !nameInput.value && result.title) nameInput.value = result.title;
+      if (objInput && !objInput.value && result.description) objInput.value = result.description;
+      showToast('Form auto-filled from scraped data!', 'success');
+    });
+
+    // Click scraped images to add as photos
+    resultsDiv.querySelectorAll('[data-scraper-img]').forEach(el => {
+      el.addEventListener('click', () => {
+        if (formPhotos.length >= 10) { showToast('Max 10 photos.', 'error'); return; }
+        const idx = parseInt(el.dataset.scraperImg);
+        const img = result.images[idx];
+        el.classList.toggle('selected');
+        if (el.classList.contains('selected')) {
+          formPhotos.push({ url: img.src, caption: img.alt || '', type: 'scraped' });
+          refreshPhotoGrid();
+          showToast('Photo added from scraped page!', 'success');
+        }
+      });
+    });
+  });
+
+  // Submit — include photos
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const fd = new FormData(form);
@@ -106,10 +203,30 @@ function initFormEvents() {
       else if (k === 'feedbackScore') data[k] = v ? parseFloat(v) : null;
       else data[k] = v;
     }
-    const editId = form.dataset.editId;
-    if (editId) { store.updateAPL(editId, data); showToast('APL updated successfully!', 'success'); }
+    data.photos = formPhotos;
+    const eid = form.dataset.editId;
+    if (eid) { store.updateAPL(eid, data); showToast('APL updated successfully!', 'success'); }
     else { store.createAPL(data); showToast('APL created successfully!', 'success'); }
     navigate('apls');
+  });
+}
+
+function refreshPhotoGrid() {
+  const grid = document.getElementById('photo-preview-grid');
+  if (!grid) return;
+  grid.innerHTML = formPhotos.map((p, i) => `
+    <div class="photo-thumb" data-photo-idx="${i}">
+      <img src="${p.url || p}" alt="${p.caption || 'Photo '+(i+1)}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect fill=%22%23333%22 width=%22100%22 height=%22100%22/><text x=%2250%25%22 y=%2250%25%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22 font-size=%2212%22>Error</text></svg>'">
+      <button type="button" class="photo-remove" data-remove-photo="${i}">✕</button>
+    </div>`).join('');
+  // Remove handlers
+  grid.querySelectorAll('[data-remove-photo]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      formPhotos.splice(parseInt(btn.dataset.removePhoto), 1);
+      refreshPhotoGrid();
+      showToast('Photo removed.', 'info');
+    });
   });
 }
 
@@ -169,7 +286,40 @@ document.addEventListener('click', (e) => {
     // Re-render table body
     navigate('apls');
   }
+  // Lightbox for gallery images
+  const galleryItem = e.target.closest('[data-lightbox]');
+  if (galleryItem) {
+    const imgs = document.querySelectorAll('[data-lightbox]');
+    const allSrcs = Array.from(imgs).map(el => el.querySelector('img')?.src).filter(Boolean);
+    let idx = parseInt(galleryItem.dataset.lightbox);
+    openLightbox(allSrcs, idx);
+  }
 });
+
+function openLightbox(images, startIdx) {
+  let idx = startIdx;
+  const overlay = document.createElement('div');
+  overlay.className = 'lightbox-overlay';
+  const render = () => {
+    overlay.innerHTML = `
+      <button class="lightbox-close">&times;</button>
+      ${images.length > 1 ? `<button class="lightbox-nav lightbox-prev">&lsaquo;</button>` : ''}
+      <img src="${images[idx]}" alt="Photo ${idx+1}">
+      ${images.length > 1 ? `<button class="lightbox-nav lightbox-next">&rsaquo;</button>` : ''}
+    `;
+    overlay.querySelector('.lightbox-close').onclick = () => overlay.remove();
+    overlay.querySelector('.lightbox-prev')?.addEventListener('click', (e) => { e.stopPropagation(); idx = (idx - 1 + images.length) % images.length; render(); });
+    overlay.querySelector('.lightbox-next')?.addEventListener('click', (e) => { e.stopPropagation(); idx = (idx + 1) % images.length; render(); });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  };
+  render();
+  document.body.appendChild(overlay);
+  document.addEventListener('keydown', function handler(e) {
+    if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', handler); }
+    if (e.key === 'ArrowLeft') { idx = (idx - 1 + images.length) % images.length; render(); }
+    if (e.key === 'ArrowRight') { idx = (idx + 1) % images.length; render(); }
+  });
+}
 
 // Sidebar nav
 document.querySelectorAll('.nav-item').forEach(item => {

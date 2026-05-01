@@ -1,4 +1,5 @@
 import { store } from './store.js';
+import { resolveImageUrl } from './media-manager.js';
 
 export function renderDashboard() {
   const stats = store.getStats();
@@ -61,7 +62,8 @@ export function renderCreateForm(editId) {
   const apl = editId ? store.getAPL(editId) : null;
   const v = (f) => apl ? (apl[f]||'') : '';
   const title = apl ? 'Edit APL' : 'Document New APL';
-  const sections = ['Metadata','Objectives','Execution','Participation','Learnings','Impact','Recommendations'];
+  const sections = ['Metadata','Objectives','Execution','Participation','Learnings','Impact','Recommendations','Media & Scraper'];
+  const existingPhotos = apl ? (apl.photos || []) : [];
   return `
     <div class="page-header"><h1>${apl?'✏️':'➕'} <span>${title}</span></h1></div>
     <div class="section-tabs">${sections.map((s,i)=>`<button class="section-tab ${i===0?'active':''}" data-section="${i}">${s}</button>`).join('')}</div>
@@ -135,6 +137,42 @@ export function renderCreateForm(editId) {
           <div class="form-group"><label class="form-label">Status</label><select class="form-select" name="status">
             ${['completed','in-progress','planned','cancelled'].map(s=>`<option ${v('status')===s?'selected':''}>${s}</option>`).join('')}
           </select></div>
+        </div>
+      </div>
+      <div class="form-section" data-section-panel="7">
+        <div class="card">
+          <h3 style="margin-bottom:20px">G. Media & Web Scraper</h3>
+          <div class="form-group">
+            <label class="form-label">📷 Upload Photos</label>
+            <input class="form-input" type="file" id="photo-upload" accept="image/*" multiple>
+            <small style="color:var(--text-muted)">Upload event photos (auto-compressed). Max 10 photos.</small>
+          </div>
+          <div class="form-group">
+            <label class="form-label">🔗 Add Photo from URL or Google Drive</label>
+            <div style="display:flex;gap:8px">
+              <input class="form-input" id="photo-url-input" placeholder="Paste image URL or Google Drive sharing link..." style="flex:1">
+              <button type="button" class="btn btn-secondary" id="btn-add-photo-url">Add</button>
+            </div>
+            <small style="color:var(--text-muted)">Supports direct image URLs and Google Drive share links.</small>
+          </div>
+          <div id="photo-preview-grid" class="photo-grid">
+            ${existingPhotos.map((p,i) => `
+              <div class="photo-thumb" data-photo-idx="${i}">
+                <img src="${resolveImageUrl(p.url || p)}" alt="${p.caption || 'Photo '+(i+1)}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect fill=%22%23333%22 width=%22100%22 height=%22100%22/><text x=%2250%25%22 y=%2250%25%22 fill=%22%23888%22 text-anchor=%22middle%22 dy=%22.3em%22 font-size=%2212%22>Error</text></svg>'">
+                <button type="button" class="photo-remove" data-remove-photo="${i}">✕</button>
+              </div>`).join('')}
+          </div>
+          <hr style="border-color:var(--border-color);margin:24px 0">
+          <h3 style="margin-bottom:16px">🌐 Web Scraper</h3>
+          <div class="form-group">
+            <label class="form-label">Scrape Event Page</label>
+            <div style="display:flex;gap:8px">
+              <input class="form-input" id="scraper-url-input" placeholder="https://event-website.com/..." style="flex:1">
+              <button type="button" class="btn btn-primary" id="btn-scrape">🔍 Scrape</button>
+            </div>
+            <small style="color:var(--text-muted)">Extract title, description, and images from any event webpage.</small>
+          </div>
+          <div id="scraper-results" class="scraper-results"></div>
         </div>
       </div>
       <div style="display:flex;gap:12px;margin-top:20px;justify-content:flex-end">
@@ -228,6 +266,16 @@ export function renderAPLDetail(id) {
       ${field('Success Rating',`${a.successRating}/10`)}${field('Feedback Score',`${a.feedbackScore}/5`)}
       ${field('Status',a.status)}
     </div><div style="margin-top:12px">${(a.tags||[]).map(t=>`<span class="tag">#${t}</span>`).join(' ')}</div></div>
+    ${(a.photos && a.photos.length > 0) ? `
+    <div class="detail-section"><div class="detail-section-title">G. Event Photos</div>
+      <div class="photo-gallery">
+        ${a.photos.map((p,i) => `
+          <div class="gallery-item" data-lightbox="${i}">
+            <img src="${resolveImageUrl(p.url || p)}" alt="${p.caption || a.name + ' photo '+(i+1)}" loading="lazy" onerror="this.parentElement.style.display='none'">
+            ${p.caption ? `<div class="gallery-caption">${p.caption}</div>` : ''}
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
     <div class="grid-2">
       <div class="detail-section"><div class="detail-section-title">B. Objectives</div>${textBlock(a.objectives)}</div>
       <div class="detail-section"><div class="detail-section-title">B. Outcomes</div>${textBlock(a.outcomes)}</div>

@@ -207,6 +207,31 @@ export function generateAPLReport(aplId) {
   y = addSectionTitle(doc, y, 'H. Recommendations');
   y = addMultiLineField(doc, y, 'Recommendations', a.recommendations);
 
+  // Section G: Photos
+  if (a.photos && a.photos.length > 0) {
+    y = addSectionTitle(doc, y, `G. Event Photos (${a.photos.length})`);
+    for (const photo of a.photos) {
+      try {
+        const src = photo.url || photo;
+        // Only base64 images can be embedded directly in jsPDF
+        if (src.startsWith('data:image')) {
+          if (y > 200) { doc.addPage(); y = 20; }
+          doc.addImage(src, 'JPEG', 16, y, 80, 60);
+          if (photo.caption) {
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(7);
+            doc.setTextColor(...COLORS.muted);
+            doc.text(photo.caption, 16, y + 63);
+          }
+          y += 68;
+        } else {
+          // External URLs — add as text links
+          y = addField(doc, y, photo.caption || 'Photo', src);
+        }
+      } catch { /* skip failed images */ }
+    }
+  }
+
   // Add footers to all pages
   const totalPages = doc.internal.getNumberOfPages();
   for (let i = 1; i <= totalPages; i++) {
